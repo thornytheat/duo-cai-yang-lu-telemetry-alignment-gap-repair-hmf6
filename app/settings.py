@@ -31,6 +31,10 @@ DRIFT_PAIR_TOLERANCE_S = 30.0     # 精配对容差（秒）
 DRIFT_ANCHOR_MAX_DT_S = 90.0      # 只在相邻采样间隔 <= 90s 的区段取穿越锚点
 DRIFT_MIN_ANCHORS = 4             # 少于该锚点数不出结论
 
+# 分段校时：相邻锚点（含窗口首/尾到最近锚点）间距超过该上限的时段视为「锚点不足」，
+# 保留设备原时刻并在结果中明确标注；上限内需覆盖正常锚点间隔（温度约 4 分钟一次穿越）。
+CORRECT_MAX_ANCHOR_GAP_S = 900.0
+
 _BASE = pathlib.Path(__file__).resolve().parent.parent
 DATA_DIR = pathlib.Path(os.environ.get("TSGRID_DATA_DIR", str(_BASE / "data")))
 SAMPLE_DIR = pathlib.Path(os.environ.get("TSGRID_SAMPLE_DIR", str(_BASE / "sample_data" / "telemetry")))

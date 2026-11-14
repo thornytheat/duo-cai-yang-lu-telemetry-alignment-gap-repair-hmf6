@@ -135,7 +135,7 @@ def fit_affine(xs: list[float], ys: list[float]) -> dict:
 
 
 def _robust_fit(pairs: list[tuple[float, float]], min_anchors: int = settings.DRIFT_MIN_ANCHORS) -> dict:
-    """MAD 剔除离群锚点后重拟合（最多 3 轮）。"""
+    """MAD 剔除离群锚点后重拟合（最多 3 轮）；返回拟合参数与最终内点锚点对。"""
     current = pairs
     dropped = 0
     fit: dict = {}
@@ -156,6 +156,7 @@ def _robust_fit(pairs: list[tuple[float, float]], min_anchors: int = settings.DR
         raise DriftError(f"内点锚点只剩 {len(current)} 个（< {min_anchors}），无法给出可靠漂移估计")
     fit = fit_affine([p[0] for p in current], [p[1] for p in current])
     fit["dropped_anchors"] = dropped
+    fit["inlier_pairs"] = list(current)
     return fit
 
 
@@ -204,8 +205,8 @@ def estimate_drift(
         sign = "快" if offset_s > 0 else "慢"
         suggestion = (
             f"设备时钟比参考{sign} {abs(offset_s):.1f}s（走时偏差 {rate_ppm:+.0f}ppm）。"
-            f"对齐建议：该设备 ts 统一减去 {offset_s:.1f}s 后再落到 1 分钟网格；"
-            f"校正后残差 RMSE {residual:.2f}s，可满足 1 分钟桶对齐需求。"
+            f"已按 t_ref = a·t_dev + b 对锚点充分的时段执行校时并进入网格/缺口/摘要/覆盖率；"
+            f"锚点不足的时段保留原时刻并单独标注。校正后残差 RMSE {residual:.2f}s，可满足 1 分钟桶对齐需求。"
         )
         verdict = f"判定为时钟漂移：|偏移| {abs(offset_s):.1f}s > 阈值 {threshold_s:g}s"
     else:
@@ -229,6 +230,9 @@ def estimate_drift(
         "ref_anchors": len(ref_hits),
         "dev_anchors": len(dev_hits),
         "coarse_lag_s": lag,
+        # 内点锚点时刻（相对窗口起点的秒）：供分段校时判定「锚点是否充分」
+        "anchor_dev_times": sorted(p[0] for p in fit["inlier_pairs"]),
+        "anchor_ref_times": sorted(p[1] for p in fit["inlier_pairs"]),
         "drifted": drifted,
         "verdict": verdict,
         "suggestion": suggestion,

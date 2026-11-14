@@ -122,7 +122,7 @@ def workbench(request: Request):
     if metric not in selected_metrics:
         metric = selected_metrics[0] if selected_metrics else ""
 
-    # 右侧预演：复用同一条 6 步流水线（pipeline.run_alignment），只展示不落库。
+    # 右侧预演：复用同一条 7 步流水线（pipeline.run_alignment），只展示不落库。
     preview = pipeline.run_alignment(dataset, device_id, metric, threshold) if metric else None
 
     return templates.TemplateResponse(
@@ -152,6 +152,7 @@ def result(request: Request, run_id: str):
     payload = store.get_run(run_id)
     if payload is None:
         raise HTTPException(status_code=404, detail=f"运行 {run_id} 不存在，请回到工作台重新执行对齐")
+    payload = _with_legacy_correction(payload)
     return templates.TemplateResponse(
         request,
         "result.html",
@@ -164,6 +165,28 @@ def result(request: Request, run_id: str):
             metric_unit=payload.get("metric_unit", ""),
         ),
     )
+
+
+def _with_legacy_correction(payload: dict) -> dict:
+    """旧版运行记录没有校时分段：补空态结论，结果页按「未校时」降级展示而不是报错。"""
+    if payload.get("correction"):
+        return payload
+    cells = (payload.get("window") or {}).get("cells", 0)
+    payload["correction"] = {
+        "applied": False,
+        "status": "none",
+        "status_label": "旧版结果未校时",
+        "reference_device": (payload.get("reference") or {}).get("device_id"),
+        "model": None,
+        "max_anchor_gap_s": settings.CORRECT_MAX_ANCHOR_GAP_S,
+        "segments": [],
+        "corrected_points": 0,
+        "raw_points": 0,
+        "cells": {"corrected_cells": 0, "raw_cells": 0, "mixed_cells": 0, "unknown_cells": cells},
+        "note": "该记录由校时功能上线前的版本生成：网格、缺口、摘要与覆盖率均按设备原时刻计算；"
+        "重新执行对齐可得到分段校时结果。",
+    }
+    return payload
 
 
 @app.get("/review", response_class=HTMLResponse)
@@ -194,6 +217,7 @@ def _report(dataset, threshold: float) -> dict:
     key = (dataset.sha256, threshold)
     cached = STATE["report_cache"].get(key)
     if cached is None:
+        # 先完整算好再换入缓存：重算失败时旧版报告继续可用（发布失败保留旧版）。
         cached = pipeline.build_report(dataset, threshold)
         STATE["report_cache"][key] = cached
     return cached
@@ -264,7 +288,14 @@ async def api_align(request: Request):
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"对齐失败：{exc}") from exc
 
-    run_id = store.save_run(dataset.dataset_id, payload)
+    # 发布：结果先完整算好，再一次落库；落库失败时既有运行记录与质量报告保持旧版不变。
+    try:
+        run_id = store.save_run(dataset.dataset_id, payload)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=500,
+            detail=f"结果发布失败：{exc}；既有运行记录与质量报告未被覆盖，可重试",
+        ) from exc
     payload_out = dict(payload)
     payload_out["run_id"] = run_id
     return payload_out
@@ -299,6 +330,13 @@ def api_report(threshold: float | None = None):
                     "rate_ppm": row["drift"].get("rate_ppm"),
                     "rmse_s": row["drift"].get("rmse_s"),
                     "drifted": row["drift"].get("drifted"),
+                },
+                "correction": {
+                    "applied": row["correction"].get("applied"),
+                    "status_label": row["correction"].get("status_label"),
+                    "reference_device": row["correction"].get("reference_device"),
+                    "segments": row["correction"].get("segments"),
+                    "cells": row["correction"].get("cells"),
                 },
                 "gap_count": row["gaps"]["count"],
             }

@@ -130,7 +130,7 @@
       stageList.innerHTML = '';
       var pct = 6;
       bar.style.width = pct + '%';
-      progressText.textContent = '正在执行：漂移估计 → 网格重采样 → 缺口判定 → 摘要 → 评分…';
+      progressText.textContent = '正在执行：漂移估计 → 分段校时 → 网格重采样 → 缺口判定 → 摘要 → 评分…';
       ticker = setInterval(function () {
         pct = Math.min(pct + 7, 92);
         bar.style.width = pct + '%';
@@ -184,11 +184,18 @@
            (drift.drifted ? ' <span class="tag err">判定漂移</span>' : ' <span class="tag ok">时钟正常</span>') +
            '，走时偏差 ' + fmtNum(drift.rate_ppm, 1) + ' ppm，校正后残差 RMSE ' + fmtNum(drift.rmse_s, 3) + ' s')
         : '基准设备，无需漂移校正';
+      var corr = data.correction || {};
+      var corrText = corr.applied
+        ? ('校时 <strong>' + corr.status_label + '</strong>（基准 ' + (corr.reference_device || '—') +
+           '）：已校时 ' + corr.cells.corrected_cells + ' 格 / 原时刻 ' + corr.cells.raw_cells + ' 格，共 ' +
+           corr.segments.length + ' 段')
+        : ('校时：' + (corr.status_label || '未校时'));
       var cov = data.coverage;
       summaryBox.hidden = false;
       summaryBox.innerHTML =
         '<h3>对齐结论</h3>' +
         '<p class="small">' + driftText + '</p>' +
+        '<p class="small">' + corrText + '</p>' +
         '<p class="small">缺口 <strong>' + data.gaps.count + '</strong> 处（插补 ' + data.gaps.interpolated_cells +
           ' 格 / 未修复 ' + data.gaps.unrepaired_cells + ' 格），carried ' + data.grid.held_cells + ' 格，' +
           '覆盖率 <strong>' + (cov.coverage * 100).toFixed(2) + '%</strong> ' + tagForGrade(cov.grade) + '</p>' +

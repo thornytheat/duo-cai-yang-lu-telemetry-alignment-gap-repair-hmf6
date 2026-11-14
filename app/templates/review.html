@@ -58,7 +58,7 @@
             <tr><th style="width:104px">设备</th><th style="width:54px">采样率</th><th style="width:92px">指标</th>
               <th style="width:70px">最差指标</th><th style="width:76px">覆盖率</th><th style="width:48px">分级</th>
               <th style="width:46px">缺口</th><th style="width:62px">carried</th>
-              <th style="width:60px">未修复</th><th style="width:118px">时钟偏移</th></tr>
+              <th style="width:60px">未修复</th><th style="width:118px">时钟偏移</th><th style="width:96px">校时</th></tr>
           </thead>
           <tbody>
             {% for dev in report.devices %}
@@ -77,6 +77,10 @@
                   <span class="num">{{ dev.offset_s | fmt(2) }} s</span>
                   {% if dev.drifted %}<span class="tag err">漂移</span>{% else %}<span class="tag ok">正常</span>{% endif %}
                 {% else %}<span class="muted small">基准设备</span>{% endif %}
+              </td>
+              <td class="nowrap">
+                {% if dev.time_corrected %}<span class="tag ok">{{ dev.correction_label }}</span>
+                {% else %}<span class="muted small">未校时</span>{% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -104,7 +108,8 @@
             <tr><th style="width:100px">设备</th><th style="width:56px">指标</th><th style="width:52px">采样率</th>
               <th style="width:54px">应到格</th><th style="width:54px">原始格</th><th style="width:54px">沿用</th>
               <th style="width:50px">插补</th><th style="width:58px">未修复</th><th style="width:72px">coverage</th>
-              <th style="width:46px">分级</th><th style="width:46px">缺口</th><th style="width:150px">漂移 offset / ppm / 残差</th></tr>
+              <th style="width:46px">分级</th><th style="width:46px">缺口</th><th style="width:150px">漂移 offset / ppm / 残差</th>
+              <th style="width:150px">校时（基准 / 状态）</th></tr>
           </thead>
           <tbody>
             {% for row in report.rows %}
@@ -127,6 +132,13 @@
                   <span class="muted">{{ row.drift.rate_ppm | fmt(1) }} ppm</span> ·
                   <span class="muted">{{ row.drift.rmse_s | fmt(3) }} s</span>
                 {% else %}<span class="muted">基准设备（不与自己比对）</span>{% endif %}
+              </td>
+              <td class="small nowrap">
+                {% if row.correction.applied %}
+                  <span class="tag ok">{{ row.correction.status_label }}</span>
+                  <span class="muted">{{ row.correction.reference_device }}</span> ·
+                  <span class="muted">已校时 {{ row.correction.cells.corrected_cells }} 格 / 原时刻 {{ row.correction.cells.raw_cells }} 格</span>
+                {% else %}<span class="muted">{{ row.correction.status_label }}</span>{% endif %}
               </td>
             </tr>
             {% endfor %}
@@ -169,7 +181,7 @@
           <div class="kpi {% if report.summary.drifted_pairs %}warn{% endif %}">
             <div class="k-label">判定漂移</div>
             <div class="k-value">{{ report.summary.drifted_pairs }}</div>
-            <div class="k-note">序列级 · 阈值 {{ report.threshold_s | fmt(1) }}s</div>
+            <div class="k-note">已校时 {{ report.summary.corrected_pairs }} 个序列 · 阈值 {{ report.threshold_s | fmt(1) }}s</div>
           </div>
           <div class="kpi">
             <div class="k-label">carried 格</div>
@@ -187,14 +199,20 @@
             1 分钟网格以 hold 沿用并计入 carried，不误判为缺口。</li>
           <li><strong>时钟：</strong>共 {{ report.summary.drifted_pairs }} 个序列判定为时钟漂移；
             LINE-A-03 的偏移量与「现场 +37 秒」的结论一致，其余设备偏移在阈值之内。</li>
+          <li><strong>校时进入结果：</strong>判定漂移的 {{ report.summary.corrected_pairs }} 个序列已按锚点充分度分段校时——
+            锚点充分的时段按 t_ref = a·t_dev + b 校正后落桶，锚点不足的时段（断采 / 降级段）保留原时刻并标注；
+            网格、缺口、小时摘要与本报告的覆盖率均按校时后时刻计算。</li>
         </ul>
 
         <details class="help" style="margin-top:10px">
           <summary>CSV 列与导出说明</summary>
           <div class="small" style="margin-top:6px">
             CSV 列：device_id, metric, interval_s, expected_cells, raw_cells, carried_cells, interpolated_cells,
-            unrepaired_cells, valid_cells, coverage, grade, gap_count, offset_s, rate_ppm, rmse_s, drifted。
-            <div style="margin-top:6px">导出的是当前数据集 + 当前阈值的全量结果；按阈值重新计算会得到不同的分级。</div>
+            unrepaired_cells, valid_cells, coverage, grade, gap_count, offset_s, rate_ppm, rmse_s, drifted,
+            time_correction, correction_reference, corrected_segments, corrected_cells, raw_cells_kept。
+            <div style="margin-top:6px">导出的是当前数据集 + 当前阈值口径下逐条流水线的全量结果；按阈值重新计算会得到不同的分级。
+            time_correction 写明每条序列的校时状态（分段校时 / 全窗校时 / 无需校时 / 基准设备不校时），
+            correction_reference 为校时采用的基准设备。</div>
           </div>
         </details>
       </div>

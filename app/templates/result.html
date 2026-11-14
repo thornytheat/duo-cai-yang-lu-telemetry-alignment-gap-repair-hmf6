@@ -23,7 +23,8 @@
       采样率 {{ run.interval_s }}s ·
       时钟基准：{% if run.reference.self_reference %}<strong>本设备（{{ run.reference.device_id }}，{{ run.reference.interval_s }}s）</strong>{% else %}<strong>{{ run.reference.device_id }}</strong>（{{ run.reference.interval_s }}s）{% endif %} ·
       阈值 {{ run.threshold_s | fmt(1) }}s ·
-      结论：{% if run.drift.available %}{{ '时钟漂移，需校时' if run.drift.drifted else '时钟正常' }}{% else %}基准设备，免校时{% endif %}，
+      结论：{% if run.drift.available %}{{ '时钟漂移，需校时' if run.drift.drifted else '时钟正常' }}{% else %}基准设备，免校时{% endif %} ·
+      校时：<strong>{{ run.correction.status_label }}</strong>（{{ run.correction.segments | length }} 段） ·
       覆盖率 <span class="tag {% if run.coverage.grade == 'A' %}ok{% elif run.coverage.grade == 'B' %}warn{% else %}err{% endif %}">{{ run.coverage.grade }}</span>
     </p>
   </div>
@@ -42,6 +43,14 @@
     <div class="k-note">
       {% if run.drift.available %}{{ '判定漂移' if run.drift.drifted else '时钟正常' }} · 走时 {{ run.drift.rate_ppm | fmt(1) }} ppm
       {% else %}基准设备，免校时{% endif %}
+    </div>
+  </div>
+  <div class="kpi {% if run.correction.applied and run.correction.status == 'partial' %}warn{% elif run.correction.applied %}ok{% endif %}">
+    <div class="k-label">校时状态</div>
+    <div class="k-value" style="font-size:19px">{{ run.correction.status_label }}</div>
+    <div class="k-note">
+      {% if run.correction.applied %}已校时 {{ run.correction.cells.corrected_cells }} 格 · 原时刻 {{ run.correction.cells.raw_cells }} 格
+      {% else %}{{ run.correction.segments[0].reason if run.correction.segments else run.correction.status_label }}{% endif %}
     </div>
   </div>
   <div class="kpi {% if run.coverage.grade == 'A' %}ok{% elif run.coverage.grade == 'B' %}warn{% else %}err{% endif %}">
@@ -67,7 +76,7 @@
   <div class="kpi">
     <div class="k-label">流水线耗时</div>
     <div class="k-value" style="font-size:17px">{{ run.total_ms | fmt(2) }} ms</div>
-    <div class="k-note">6 步真实测量</div>
+    <div class="k-note">7 步真实测量</div>
   </div>
 </div>
 
@@ -76,6 +85,7 @@
     <div class="segmented">
       <button type="button" data-tab-target="tab-grid" class="active">网格预览</button>
       <button type="button" data-tab-target="tab-drift">漂移依据</button>
+      <button type="button" data-tab-target="tab-correct">校时分段</button>
       <button type="button" data-tab-target="tab-gap">缺口明细</button>
       <button type="button" data-tab-target="tab-hour">小时摘要</button>
       <button type="button" data-tab-target="tab-cover">覆盖率与耗时</button>
@@ -89,11 +99,13 @@
   <div class="panel-body flush">
     <div id="tab-grid" class="tab-panel">
       <div class="panel-head" style="border-top:0">
-        <h3>二、1 分钟网格预览（前 60 分钟）</h3>
+        <h3>三、1 分钟网格预览（前 60 分钟，按校时后时刻落桶）</h3>
         <div class="panel-actions">
           <span class="tag">聚合 {{ run.grid.agg_cells }} · 采样 {{ run.grid.sample_cells }}</span>
           <span class="tag warn">沿用 {{ run.grid.held_cells }}</span>
           <span class="tag">空缺 {{ run.grid.empty_cells }}（含未修复）</span>
+          {% if run.correction.applied %}<span class="tag ok">已校时 {{ run.correction.cells.corrected_cells }}</span>
+          <span class="tag warn">原时刻 {{ run.correction.cells.raw_cells }}</span>{% endif %}
         </div>
       </div>
       <div class="table-wrap roomy">
@@ -101,7 +113,7 @@
           <thead>
             <tr><th style="width:170px">分钟桶</th><th style="width:110px">值（{{ run.metric_unit }}）</th>
               <th style="width:110px">来源</th><th style="width:80px">原始点数</th>
-              <th style="width:76px">carried</th><th>min / max</th></tr>
+              <th style="width:76px">carried</th><th style="width:86px">时基</th><th>min / max</th></tr>
           </thead>
           <tbody>
             {% for cell in run.preview %}
@@ -117,6 +129,12 @@
               </td>
               <td class="num">{{ cell.samples }}</td>
               <td>{% if cell.carried %}<span class="tag warn">是</span>{% else %}<span class="muted">否</span>{% endif %}</td>
+              <td>
+                {% if cell.time_basis == 'corrected' %}<span class="tag ok">已校时</span>
+                {% elif cell.time_basis == 'raw' %}<span class="tag">原时刻</span>
+                {% elif cell.time_basis == 'mixed' %}<span class="tag warn">混合</span>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
               <td class="small muted nowrap">
                 {% if cell.min is not none %}{{ cell.min | fmt(3) }} / {{ cell.max | fmt(3) }}{% else %}—{% endif %}
               </td>
@@ -128,7 +146,8 @@
       <div class="panel-body tight">
         <p class="small muted" style="margin:0">
           聚合 {{ run.grid.agg_cells }} 格 · 原始采样 {{ run.grid.sample_cells }} 格 · 沿用 carried {{ run.grid.held_cells }} 格 ·
-          空缺 {{ run.grid.empty_cells }} 格（含未修复）。表格在容器内滚动，页面只滚主区。
+          空缺 {{ run.grid.empty_cells }} 格（含未修复）。时基列：「已校时」按 t_ref = a·t_dev + b 落桶，
+          「原时刻」为锚点不足段保留的设备原时刻。表格在容器内滚动，页面只滚主区。
         </p>
       </div>
     </div>
@@ -173,9 +192,62 @@
       {% endif %}
     </div>
 
+    <div id="tab-correct" class="tab-panel" hidden>
+      <div class="panel-head" style="border-top:0">
+        <h3>二、校时分段（{{ run.correction.segments | length }} 段 · {{ run.correction.status_label }}）</h3>
+        <div class="panel-actions">
+          <span class="tag {% if run.correction.applied %}ok{% endif %}">{{ run.correction.status_label }}</span>
+          {% if run.correction.applied %}<span class="tag">基准 {{ run.correction.reference_device }}</span>
+          <span class="tag">锚点间距上限 {{ run.correction.max_anchor_gap_s | fmt(0) }} s</span>{% endif %}
+        </div>
+      </div>
+      <div class="panel-body tight">
+        <p style="margin:0"><strong>口径：</strong>{{ run.correction.note }}</p>
+        {% if run.correction.applied %}
+        <p class="small muted" style="margin:4px 0 0">
+          校正模型 <code>{{ run.correction.model.formula }}</code>（a = {{ '%.8f' | format(run.correction.model.a) }}，
+          b = {{ run.correction.model.b | fmt(3) }} s）；校正点 {{ run.correction.corrected_points }} 个，
+          保留原时刻点 {{ run.correction.raw_points }} 个；网格：已校时 {{ run.correction.cells.corrected_cells }} 格 ·
+          原时刻 {{ run.correction.cells.raw_cells }} 格{% if run.correction.cells.mixed_cells %} · 段交界混合 {{ run.correction.cells.mixed_cells }} 格{% endif %}。
+        </p>
+        {% endif %}
+      </div>
+      <div class="table-wrap auto">
+        <table class="dense">
+          <thead><tr><th style="width:40px">#</th><th style="width:170px">段起点</th><th style="width:170px">段终点</th>
+            <th style="width:60px">格数</th><th style="width:110px">校时状态</th><th style="width:200px">采用的基准</th>
+            <th style="width:70px">锚点</th><th>说明</th></tr></thead>
+          <tbody>
+            {% for seg in run.correction.segments %}
+            <tr>
+              <td>{{ loop.index }}</td>
+              <td class="small muted nowrap">{{ seg.start_time }}</td>
+              <td class="small muted nowrap">{{ seg.end_time }}</td>
+              <td class="num">{{ seg.cells }}</td>
+              <td>
+                {% if seg.corrected %}<span class="tag ok">已校时</span>
+                {% else %}<span class="tag warn">保留原时刻</span>{% endif %}
+              </td>
+              <td class="small nowrap">{{ seg.basis }}</td>
+              <td class="num">{{ seg.anchors }}</td>
+              <td class="small">{{ seg.reason }}</td>
+            </tr>
+            {% endfor %}
+          </tbody>
+        </table>
+      </div>
+      <div class="panel-body tight">
+        <p class="small muted" style="margin:0">
+          分段规则：相邻锚点（含窗口首/尾到最近锚点）间距 ≤ {{ run.correction.max_anchor_gap_s | fmt(0) }}s 的时段按模型校时；
+          更长的空档（断采 / 降级上报 / 信号平坦）锚点不足，保留设备原时刻。各段首尾相接、不重不漏，
+          一起发布为同一次运行结果；重跑同一数据得到完全一致的分段与网格。
+        </p>
+      </div>
+    </div>
+
     <div id="tab-gap" class="tab-panel" hidden>
       <div class="panel-head" style="border-top:0">
-        <h3>三、缺口明细（{{ run.gaps.count }} 处）</h3>
+        <h3>四、缺口明细（{{ run.gaps.count }} 处）</h3>
         <div class="panel-actions">
           <span class="tag">插补 {{ run.gaps.interpolated_cells }} 格</span>
           <span class="tag err">未修复 {{ run.gaps.unrepaired_cells }} 格</span>
@@ -220,7 +292,7 @@
 
     <div id="tab-hour" class="tab-panel" hidden>
       <div class="panel-head" style="border-top:0">
-        <h3>四、小时摘要（min / max / mean / p95 + 缺口 + carried）</h3>
+        <h3>五、小时摘要（min / max / mean / p95 + 缺口 + carried）</h3>
         <div class="panel-actions"><span class="tag">{{ run.hourly | length }} 个小时桶</span></div>
       </div>
       <div class="table-wrap auto">
@@ -250,7 +322,7 @@
         <div>
         <section class="panel">
           <div class="panel-head">
-            <h3>五、覆盖率与分级</h3>
+            <h3>六、覆盖率与分级</h3>
             <div class="panel-actions">
               <span class="tag {% if run.coverage.grade == 'A' %}ok{% elif run.coverage.grade == 'B' %}warn{% else %}err{% endif %}">等级 {{ run.coverage.grade }}</span>
             </div>
@@ -259,6 +331,10 @@
             <table class="dense">
               <tbody>
                 <tr><th style="width:200px">应到格</th><td>{{ run.coverage.expected_cells }}</td></tr>
+                <tr><th>时基（校时分段）</th>
+                  <td>{{ run.correction.status_label }}：已校时 {{ run.correction.cells.corrected_cells }} 格 ·
+                    原时刻 {{ run.correction.cells.raw_cells }} 格{% if run.correction.cells.mixed_cells %} · 混合 {{ run.correction.cells.mixed_cells }} 格{% endif %}
+                    （{{ run.correction.segments | length }} 段）</td></tr>
                 <tr><th>有效格（原始+沿用+插补）</th><td>{{ run.coverage.valid_cells }}</td></tr>
                 <tr><th>原始格（聚合+采样）</th><td>{{ run.coverage.raw_cells }}（raw 覆盖率 {{ run.coverage.raw_coverage | pct(2) }}）</td></tr>
                 <tr><th>沿用 carried</th><td>{{ run.coverage.carried_cells }}</td></tr>
@@ -275,7 +351,7 @@
         <div>
         <section class="panel">
           <div class="panel-head">
-            <h3>六、流水线耗时（真实测量）</h3>
+            <h3>七、流水线耗时（真实测量）</h3>
             <div class="panel-actions"><span class="tag">合计 {{ run.total_ms | fmt(2) }} ms</span></div>
           </div>
           <div class="table-wrap auto">

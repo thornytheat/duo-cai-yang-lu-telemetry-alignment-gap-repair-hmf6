@@ -10,7 +10,7 @@
 <a class="btn secondary small" href="/review">质量报告</a>
 <a class="btn secondary small" href="/">回总览</a>
 {% endblock %}
-{% block status_left %}预演复用同一条 6 步流水线（数据导入 → 漂移 → 重采样 → 缺口 → 摘要 → 评分），仅展示不落库{% endblock %}
+{% block status_left %}预演复用同一条 7 步流水线（数据导入 → 漂移 → 分段校时 → 重采样 → 缺口 → 摘要 → 评分），仅展示不落库{% endblock %}
 {% block status_right %}数据集 {{ dataset.dataset_id }} · 网格 {{ bucket_count }} 格 · 漂移阈值 {{ threshold }} s{% endblock %}
 
 {% block content %}
@@ -132,7 +132,7 @@
       <div class="kpi">
         <div class="k-label">流水线耗时</div>
         <div class="k-value" style="font-size:17px">{{ preview.total_ms | fmt(2) }} ms</div>
-        <div class="k-note">6 步 · 采样率 {{ preview.interval_s }}s</div>
+        <div class="k-note">7 步 · 采样率 {{ preview.interval_s }}s</div>
       </div>
     </div>
 
@@ -173,6 +173,30 @@
         <p class="small muted" style="margin:0">{{ d.suggestion }}</p>
       </div>
       {% endif %}
+      {% set corr = preview.correction %}
+      <div class="panel-body tight" style="border-top:1px solid var(--line)">
+        <p style="margin:0">
+          <strong>校时分段（{{ corr.status_label }}）：</strong>{{ corr.note }}
+        </p>
+        <div class="table-wrap auto" style="margin-top:6px">
+          <table class="dense">
+            <thead><tr><th style="width:40px">#</th><th style="width:160px">段起点</th><th style="width:160px">段终点</th>
+              <th style="width:56px">格数</th><th style="width:100px">校时状态</th><th>采用的基准 / 说明</th></tr></thead>
+            <tbody>
+              {% for seg in corr.segments %}
+              <tr>
+                <td>{{ loop.index }}</td>
+                <td class="small muted nowrap">{{ seg.start_time }}</td>
+                <td class="small muted nowrap">{{ seg.end_time }}</td>
+                <td class="num">{{ seg.cells }}</td>
+                <td>{% if seg.corrected %}<span class="tag ok">已校时</span>{% else %}<span class="tag warn">保留原时刻</span>{% endif %}</td>
+                <td class="small">{{ seg.basis }} · {{ seg.reason }}</td>
+              </tr>
+              {% endfor %}
+            </tbody>
+          </table>
+        </div>
+      </div>
     </section>
 
     <section class="panel" id="m3">
@@ -187,7 +211,8 @@
         <table class="dense">
           <thead>
             <tr><th style="width:170px">分钟桶</th><th style="width:96px">值（{{ preview.metric_unit }}）</th>
-              <th style="width:110px">来源</th><th style="width:80px">原始点数</th><th style="width:76px">carried</th><th>min / max</th></tr>
+              <th style="width:110px">来源</th><th style="width:80px">原始点数</th><th style="width:76px">carried</th>
+              <th style="width:80px">时基</th><th>min / max</th></tr>
           </thead>
           <tbody>
             {% for cell in preview.preview %}
@@ -203,6 +228,12 @@
               </td>
               <td class="num">{{ cell.samples }}</td>
               <td>{% if cell.carried %}<span class="tag warn">是</span>{% else %}<span class="muted">否</span>{% endif %}</td>
+              <td>
+                {% if cell.time_basis == 'corrected' %}<span class="tag ok">已校时</span>
+                {% elif cell.time_basis == 'raw' %}<span class="tag">原时刻</span>
+                {% elif cell.time_basis == 'mixed' %}<span class="tag warn">混合</span>
+                {% else %}<span class="muted">—</span>{% endif %}
+              </td>
               <td class="small muted nowrap">
                 {% if cell.min is not none %}{{ cell.min | fmt(3) }} / {{ cell.max | fmt(3) }}{% else %}—{% endif %}
               </td>

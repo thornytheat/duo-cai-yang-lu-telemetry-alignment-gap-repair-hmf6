@@ -1,13 +1,13 @@
 """编排：一条 (设备, 指标) 的对齐流水线。
 
-1 数据导入（序列与基准选择）→ 2 漂移估计 → 3 网格重采样 → 4 缺口判定
-→ 5 小时摘要 → 6 质量评分。路由只调用本模块，不写业务规则。
+1 数据导入（序列与基准选择）→ 2 漂移估计 → 3 分段校时 → 4 网格重采样 → 5 缺口判定
+→ 6 小时摘要 → 7 质量评分。路由只调用本模块，不写业务规则。
 """
 from __future__ import annotations
 
 import time
 
-from . import drift, gaps, grid, quality, settings, summary
+from . import correct, drift, gaps, grid, quality, settings, summary
 from .telemetry import Dataset, Series
 
 
@@ -71,26 +71,42 @@ def run_alignment(
         drift_result["reference_interval_s"] = ref_series.interval_s
         stage("漂移估计", f"锚点 {drift_result['anchors']} 个，offset {drift_result['offset_s']:+.1f}s", t0)
 
-    # 3) 网格重采样
+    # 3) 分段校时：按锚点充分度切连续时段，逐段校正（不足段保留原时刻并标注）
     t0 = time.perf_counter()
     start_bucket = int(dataset.window_start // settings.BUCKET_SECONDS)
     end_bucket = int(dataset.window_end // settings.BUCKET_SECONDS)
-    cells = grid.resample(series.points, series.interval_s, start_bucket, end_bucket)
+    correction = correct.build_correction(
+        series.points, drift_result, ref_device, dataset.window_start, start_bucket, end_bucket
+    )
+    corrected_segments = sum(1 for s in correction["segments"] if s["corrected"])
+    stage(
+        "分段校时",
+        f"{correction['status_label']}：{len(correction['segments'])} 段（校正 {corrected_segments} / 保留原时刻 "
+        f"{len(correction['segments']) - corrected_segments}），校正点 {correction['corrected_points']} / {len(series.points)}",
+        t0,
+    )
+
+    # 4) 网格重采样（按校时后时刻落桶）
+    t0 = time.perf_counter()
+    cells = grid.resample(correction["points"], series.interval_s, start_bucket, end_bucket)
+    correct.label_cells(cells, correction["bucket_labels"], start_bucket)
     grid_stats = grid.stats(cells)
+    time_stats = correct.cell_stats(cells)
+    correction["cells"] = time_stats
     stage("网格重采样", f"{grid_stats['cells']} 格（聚合 {grid_stats['agg_cells']} / 采样 {grid_stats['sample_cells']} / 沿用 {grid_stats['held_cells']}）", t0)
 
-    # 4) 缺口判定与修复
+    # 5) 缺口判定与修复
     t0 = time.perf_counter()
     gap_result = gaps.find_gaps(cells)
     gaps.apply_repair(cells)
     stage("缺口判定", f"缺口 {gap_result['count']} 处，插补 {gap_result['interpolated_cells']} 格，未修复 {gap_result['unrepaired_cells']} 格", t0)
 
-    # 5) 小时摘要
+    # 6) 小时摘要
     t0 = time.perf_counter()
     hourly = summary.hourly_summary(cells)
     stage("小时摘要", f"{len(hourly)} 个小时桶", t0)
 
-    # 6) 质量评分
+    # 7) 质量评分
     t0 = time.perf_counter()
     expected = dataset.bucket_count()
     coverage = quality.coverage_report(cells, expected, gap_result)
@@ -111,6 +127,22 @@ def run_alignment(
             "bucket_seconds": settings.BUCKET_SECONDS,
         },
         "drift": drift_result,
+        "correction": {
+            key: correction[key]
+            for key in (
+                "applied",
+                "status",
+                "status_label",
+                "reference_device",
+                "model",
+                "max_anchor_gap_s",
+                "segments",
+                "corrected_points",
+                "raw_points",
+                "cells",
+                "note",
+            )
+        },
         "grid": grid_stats,
         "gaps": gap_result,
         "coverage": coverage,
@@ -139,6 +171,7 @@ def build_report(dataset: Dataset, threshold_s: float = settings.DEFAULT_OFFSET_
                 "interval_s": series.interval_s,
                 "coverage": payload["coverage"],
                 "drift": payload["drift"],
+                "correction": payload["correction"],
                 "gaps": payload["gaps"],
             }
         )

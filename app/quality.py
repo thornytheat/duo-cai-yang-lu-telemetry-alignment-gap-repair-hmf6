@@ -58,6 +58,7 @@ def device_rollup(rows: list[dict]) -> list[dict]:
         offset = None
         if drift_rows:
             offset = drift_rows[0]["drift"]["offset_s"]
+        corrected_rows = [r for r in items if (r.get("correction") or {}).get("applied")]
         out.append(
             {
                 "device_id": device,
@@ -71,6 +72,8 @@ def device_rollup(rows: list[dict]) -> list[dict]:
                 "unrepaired_cells": sum(r["coverage"]["unrepaired_cells"] for r in items),
                 "offset_s": offset,
                 "drifted": any(r.get("drift") and r["drift"].get("drifted") for r in items),
+                "time_corrected": bool(corrected_rows),
+                "correction_label": corrected_rows[0]["correction"]["status_label"] if corrected_rows else "未校时",
             }
         )
     out.sort(key=lambda d: d["device_id"])
@@ -83,10 +86,12 @@ def report_summary(rows: list[dict]) -> dict:
     for g in grades:
         counts[g] = counts.get(g, 0) + 1
     drifted = [r for r in rows if r.get("drift") and r["drift"].get("drifted")]
+    corrected = [r for r in rows if (r.get("correction") or {}).get("applied")]
     return {
         "pairs": len(rows),
         "grade_counts": counts,
         "drifted_pairs": len(drifted),
+        "corrected_pairs": len(corrected),
         "avg_coverage": sum(r["coverage"]["coverage"] for r in rows) / len(rows) if rows else None,
         "total_gaps": sum(r["coverage"]["gap_count"] for r in rows),
         "total_carried": sum(r["coverage"]["carried_cells"] for r in rows),
@@ -111,6 +116,11 @@ CSV_COLUMNS = [
     "rate_ppm",
     "rmse_s",
     "drifted",
+    "time_correction",
+    "correction_reference",
+    "corrected_segments",
+    "corrected_cells",
+    "raw_cells_kept",
 ]
 
 
@@ -121,6 +131,9 @@ def report_csv(rows: list[dict]) -> str:
     for row in rows:
         drift = row.get("drift") or {}
         cov = row["coverage"]
+        corr = row.get("correction") or {}
+        corr_cells = corr.get("cells") or {}
+        segments = corr.get("segments") or []
         writer.writerow(
             [
                 row["device_id"],
@@ -139,6 +152,11 @@ def report_csv(rows: list[dict]) -> str:
                 "" if drift.get("rate_ppm") is None else f"{drift['rate_ppm']:.1f}",
                 "" if drift.get("rmse_s") is None else f"{drift['rmse_s']:.3f}",
                 "" if drift.get("drifted") is None else ("yes" if drift["drifted"] else "no"),
+                corr.get("status_label", ""),
+                "" if not corr.get("applied") else (corr.get("reference_device") or ""),
+                "" if not corr.get("applied") else sum(1 for s in segments if s.get("corrected")),
+                "" if not corr.get("applied") else corr_cells.get("corrected_cells", 0),
+                "" if not corr.get("applied") else corr_cells.get("raw_cells", 0),
             ]
         )
     return buffer.getvalue()
